@@ -5,13 +5,26 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.graphics.Color
+import android.graphics.PixelFormat
+import android.graphics.Typeface
+import android.graphics.drawable.GradientDrawable
 import android.os.Handler
 import android.os.Looper
+import android.provider.Settings
 import android.util.Log
+import android.view.Gravity
+import android.view.KeyEvent
+import android.view.View
+import android.view.WindowManager
 import android.view.accessibility.AccessibilityEvent
 import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
-import com.focusguard.app.BlockOverlayActivity
+import android.widget.Button
+import android.widget.FrameLayout
+import android.widget.LinearLayout
+import android.widget.TextView
+import kotlin.random.Random
 
 /**
  * FocusAccessibilityService — Content blocking engine for FocusGuard.
@@ -27,6 +40,11 @@ import com.focusguard.app.BlockOverlayActivity
  * 2. Browser URL bar scanning (for youtube.com/shorts, instagram.com/reels)
  * 3. Layout tree heuristic scanning with depth-limited traversal (for dynamic feeds)
  * 4. Debounced event processing to prevent Android watchdog kills
+ *
+ * Blocking strategy:
+ * Uses WindowManager TYPE_APPLICATION_OVERLAY to draw a fullscreen blocking overlay
+ * directly from the service. This bypasses Android 10+ background activity start
+ * restrictions that cause Activity-based overlays to silently fail on many OEMs.
  */
 class FocusAccessibilityService : AccessibilityService() {
 
@@ -86,6 +104,22 @@ class FocusAccessibilityService : AccessibilityService() {
             "snapchat.com/spotlight",
             "snapchat.com/discover"
         )
+
+        // Motivational quotes shown on the block overlay
+        private val MOTIVATIONAL_QUOTES = arrayOf(
+            "Is this cheap 15-second escape really worth your dreams?",
+            "Your focus is being monetized. Take back control of your mind.",
+            "Stop consuming someone else's highlight reel. Go build your own life.",
+            "You opened this app to do something else. What was it?",
+            "Every short you watch is a trade: your potential in exchange for flashing lights.",
+            "Break the loop. Step away.",
+            "Your future self is watching you right now. Make them proud.",
+            "Success is built on what you do when you are bored. Don't scroll.",
+            "This feed is designed to keep you trapped. Escape now.",
+            "The algorithm doesn't care about you. Your goals do.",
+            "You are stronger than a dopamine loop. Prove it.",
+            "15 seconds × 100 times = 25 minutes of your life. Gone."
+        )
     }
 
     private var lastBlockTime: Long = 0
@@ -93,10 +127,15 @@ class FocusAccessibilityService : AccessibilityService() {
     private val mainHandler = Handler(Looper.getMainLooper())
     private var pendingDebounceRunnable: Runnable? = null
 
-    // Broadcast receiver: BlockOverlayActivity sends this to trigger back navigation
+    // WindowManager overlay state
+    private var overlayView: View? = null
+    private var isOverlayShowing = false
+
+    // Broadcast receiver: overlay "Go Back" button sends this to trigger back navigation
     private val exitReceiver = object : BroadcastReceiver() {
         override fun onReceive(context: Context?, intent: Intent?) {
             if (intent?.action == "com.focusguard.ACTION_EXIT_FEED") {
+                dismissOverlay()
                 executeBackNavigation()
             }
         }
@@ -114,9 +153,15 @@ class FocusAccessibilityService : AccessibilityService() {
     // ========================================================================
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
+        // Don't process events while overlay is showing
+        if (isOverlayShowing) return
+
         val packageName = event.packageName?.toString() ?: return
         val className = event.className?.toString() ?: ""
         val eventType = event.eventType
+
+        // Ignore events from our own app
+        if (packageName.contains("focusguard", ignoreCase = true)) return
 
         // Classify the source app
         val appType = classifyApp(packageName)
@@ -129,7 +174,7 @@ class FocusAccessibilityService : AccessibilityService() {
         if (eventType == AccessibilityEvent.TYPE_WINDOW_STATE_CHANGED) {
             if (matchActivityClassName(appType, className)) {
                 log("BLOCKED via Activity class match: $className (pkg=$packageName)")
-                triggerBlockerOverlay()
+                triggerBlock()
                 return
             }
         }
@@ -213,6 +258,8 @@ class FocusAccessibilityService : AccessibilityService() {
     // ========================================================================
 
     private fun performContentScan(packageName: String, appType: AppType) {
+        if (isOverlayShowing) return
+
         val rootNode = acquireRootNode() ?: run {
             log("Root node is null — skipping scan for $packageName")
             return
@@ -229,7 +276,7 @@ class FocusAccessibilityService : AccessibilityService() {
 
             if (shouldBlock) {
                 log("BLOCKED via content scan: appType=$appType, pkg=$packageName")
-                triggerBlockerOverlay()
+                triggerBlock()
             }
         } finally {
             rootNode.recycle()
@@ -265,17 +312,9 @@ class FocusAccessibilityService : AccessibilityService() {
     // BROWSER DETECTION
     // ========================================================================
 
-    /**
-     * Scans browser UI for blocked URLs in the address bar.
-     * Also falls back to heuristic text scanning for WebView content.
-     */
     private fun scanBrowser(root: AccessibilityNodeInfo): Boolean {
-        // Primary: URL bar scanning
         if (scanUrlBar(root, 0)) return true
-
-        // Secondary: WebView content heuristics (catches embedded players)
         if (scanForBrowserContentIndicators(root, 0)) return true
-
         return false
     }
 
@@ -285,7 +324,6 @@ class FocusAccessibilityService : AccessibilityService() {
         val resId = node.viewIdResourceName ?: ""
         val text = node.text?.toString() ?: ""
 
-        // Check if this node is a URL bar
         val isUrlBar = URL_BAR_RESOURCE_IDS.any { resId.contains(it, ignoreCase = true) }
 
         if (isUrlBar && text.isNotEmpty()) {
@@ -296,11 +334,9 @@ class FocusAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Also check raw text nodes that contain full URLs (some browsers render URL in title)
         if (text.isNotEmpty()) {
             val lowerText = text.lowercase()
             if (BLOCKED_URL_PATTERNS.any { lowerText.contains(it) }) {
-                // Validate this isn't just a link in page content — check if it looks like a URL
                 if (lowerText.startsWith("http") || lowerText.contains("://") ||
                     lowerText.startsWith("youtube.com") || lowerText.startsWith("instagram.com") ||
                     lowerText.startsWith("m.youtube") || lowerText.startsWith("www.")) {
@@ -321,22 +357,17 @@ class FocusAccessibilityService : AccessibilityService() {
         return false
     }
 
-    /**
-     * Catches browser-embedded YouTube Shorts and Instagram Reels players
-     * by scanning WebView content for player-specific UI elements.
-     */
     private fun scanForBrowserContentIndicators(node: AccessibilityNodeInfo, depth: Int): Boolean {
         if (depth > MAX_SCAN_DEPTH) return false
 
         val text = node.text?.toString() ?: ""
         val desc = node.contentDescription?.toString() ?: ""
 
-        // YouTube Shorts in-browser player indicators
         if (text.contains("Shorts", ignoreCase = true) && (
-            desc.contains("player", ignoreCase = true) ||
-            desc.contains("Dislike", ignoreCase = true) ||
-            text.contains("Subscribe", ignoreCase = true)
-        )) {
+                    desc.contains("player", ignoreCase = true) ||
+                            desc.contains("Dislike", ignoreCase = true) ||
+                            text.contains("Subscribe", ignoreCase = true)
+                    )) {
             log("Browser Shorts player detected via content heuristic")
             return true
         }
@@ -401,7 +432,6 @@ class FocusAccessibilityService : AccessibilityService() {
             return true
         }
 
-        // Recurse into children
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
             try {
@@ -417,8 +447,8 @@ class FocusAccessibilityService : AccessibilityService() {
         val indicators = listOf("shorts")
         return indicators.any { indicator ->
             text.equals(indicator, ignoreCase = true) ||
-            desc.contains(indicator, ignoreCase = true) ||
-            resId.contains(indicator, ignoreCase = true)
+                    desc.contains(indicator, ignoreCase = true) ||
+                    resId.contains(indicator, ignoreCase = true)
         }
     }
 
@@ -444,7 +474,7 @@ class FocusAccessibilityService : AccessibilityService() {
             return true
         }
 
-        // 2. Reels player viewport detection (resource IDs — Instagram uses "clips" internally)
+        // 2. Reels player viewport detection (resource IDs)
         val hasReelsResId = resId.contains("clips_viewer", ignoreCase = true) ||
                 resId.contains("reels_viewer", ignoreCase = true) ||
                 resId.contains("clips_tab", ignoreCase = true) ||
@@ -471,7 +501,6 @@ class FocusAccessibilityService : AccessibilityService() {
             return true
         }
 
-        // Recurse into children
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
             try {
@@ -487,8 +516,8 @@ class FocusAccessibilityService : AccessibilityService() {
         val indicators = listOf("reels", "clips")
         return indicators.any { indicator ->
             text.equals(indicator, ignoreCase = true) ||
-            desc.contains(indicator, ignoreCase = true) ||
-            resId.contains(indicator, ignoreCase = true)
+                    desc.contains(indicator, ignoreCase = true) ||
+                    resId.contains(indicator, ignoreCase = true)
         }
     }
 
@@ -518,7 +547,6 @@ class FocusAccessibilityService : AccessibilityService() {
                 resId.contains("spotlight_feed", ignoreCase = true) ||
                 resId.contains("spotlight_player", ignoreCase = true)
         if (hasSpotlightResId) {
-            // Exclude navigation buttons/tabs (we only want the actual feed viewport)
             if (!resId.contains("tab", ignoreCase = true) &&
                 !resId.contains("button", ignoreCase = true) &&
                 !resId.contains("icon", ignoreCase = true)) {
@@ -544,7 +572,6 @@ class FocusAccessibilityService : AccessibilityService() {
         // 4. Snapchat text/description indicators
         if (desc.contains("Spotlight", ignoreCase = true) ||
             desc.contains("Discover", ignoreCase = true)) {
-            // Only match if not a navigation element
             if (!desc.contains("tab", ignoreCase = true) &&
                 !desc.contains("button", ignoreCase = true)) {
                 log("SC: Feed content desc=$desc")
@@ -564,14 +591,13 @@ class FocusAccessibilityService : AccessibilityService() {
             }
         }
 
-        // 6. Spotlight-specific text (e.g., "Send message in Spotlight")
+        // 6. Spotlight-specific text
         if (text.contains("Send message in Spotlight", ignoreCase = true) ||
             text.contains("Spotlight & Sounds", ignoreCase = true)) {
             log("SC: Spotlight UI text=$text")
             return true
         }
 
-        // Recurse into children
         for (i in 0 until node.childCount) {
             val child = node.getChild(i) ?: continue
             try {
@@ -587,19 +613,27 @@ class FocusAccessibilityService : AccessibilityService() {
         val indicators = listOf("spotlight", "discover", "highlights")
         return indicators.any { indicator ->
             text.equals(indicator, ignoreCase = true) ||
-            desc.contains(indicator, ignoreCase = true) ||
-            resId.contains(indicator, ignoreCase = true)
+                    desc.contains(indicator, ignoreCase = true) ||
+                    resId.contains(indicator, ignoreCase = true)
         }
     }
 
     // ========================================================================
-    // BLOCKER OVERLAY TRIGGER
+    // BLOCK TRIGGER + OVERLAY
     // ========================================================================
 
-    private fun triggerBlockerOverlay() {
+    /**
+     * Main entry point to block the user. Enforces cooldown, increments counter,
+     * and shows the fullscreen WindowManager overlay.
+     */
+    private fun triggerBlock() {
         val currentTime = System.currentTimeMillis()
         if (currentTime - lastBlockTime < BLOCK_COOLDOWN_MS) {
             log("Block skipped — cooldown active (${currentTime - lastBlockTime}ms since last)")
+            return
+        }
+        if (isOverlayShowing) {
+            log("Block skipped — overlay already showing")
             return
         }
         lastBlockTime = currentTime
@@ -609,14 +643,201 @@ class FocusAccessibilityService : AccessibilityService() {
         val count = prefs.getInt("blocked_count", 0)
         prefs.edit().putInt("blocked_count", count + 1).apply()
 
-        log(">>> OVERLAY TRIGGERED — total blocks: ${count + 1}")
+        log(">>> BLOCK TRIGGERED — total blocks: ${count + 1}")
 
-        val intent = Intent(this, BlockOverlayActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_NEW_TASK or
-                    Intent.FLAG_ACTIVITY_CLEAR_TOP or
-                    Intent.FLAG_ACTIVITY_SINGLE_TOP
+        // Show the WindowManager overlay directly (bypasses Android 10+ background activity restrictions)
+        mainHandler.post { showOverlay() }
+    }
+
+    /**
+     * Shows a fullscreen blocking overlay via WindowManager.
+     * This is drawn directly on top of all apps using TYPE_APPLICATION_OVERLAY.
+     * Unlike Activity-based overlays, this cannot be silently blocked by Android
+     * or OEM-specific background activity restrictions.
+     */
+    private fun showOverlay() {
+        if (isOverlayShowing) return
+
+        // Verify overlay permission is still granted
+        if (!Settings.canDrawOverlays(this)) {
+            log("ERROR: Overlay permission not granted — cannot show block screen")
+            return
         }
-        startActivity(intent)
+
+        try {
+            val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+
+            val overlay = buildOverlayView()
+
+            val params = WindowManager.LayoutParams(
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                // Focusable so we can intercept the back button
+                // LAYOUT_IN_SCREEN to cover status bar
+                WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN or
+                        WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON,
+                PixelFormat.TRANSLUCENT
+            )
+
+            wm.addView(overlay, params)
+            overlayView = overlay
+            isOverlayShowing = true
+
+            log("Overlay shown successfully")
+        } catch (e: Exception) {
+            log("ERROR showing overlay: ${e.message}")
+            isOverlayShowing = false
+        }
+    }
+
+    /**
+     * Dismisses the blocking overlay and performs back navigation
+     * to exit the short-form feed.
+     */
+    private fun dismissOverlay() {
+        if (!isOverlayShowing) return
+
+        try {
+            val wm = getSystemService(Context.WINDOW_SERVICE) as WindowManager
+            overlayView?.let { wm.removeView(it) }
+        } catch (e: Exception) {
+            log("Error removing overlay: ${e.message}")
+        }
+
+        overlayView = null
+        isOverlayShowing = false
+        log("Overlay dismissed")
+    }
+
+    /**
+     * Builds the fullscreen block overlay view programmatically.
+     * Design matches the app's dark theme:
+     * - Dark near-opaque background (#F5 alpha on #0A0A0C)
+     * - Centered card with rounded corners (#141419)
+     * - Lock emoji icon
+     * - "Focus Guarded" title
+     * - Random motivational quote
+     * - "Go Back to Work" button
+     */
+    private fun buildOverlayView(): View {
+        val density = resources.displayMetrics.density
+
+        // Root container — fullscreen dark background, consumes all touches
+        val root = object : FrameLayout(this) {
+            override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+                // Intercept back button to prevent bypassing the block screen
+                if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+                    return true
+                }
+                return super.dispatchKeyEvent(event)
+            }
+        }.apply {
+            setBackgroundColor(Color.parseColor("#F50A0A0C"))
+            isClickable = true
+            isFocusable = true
+        }
+
+        // Center card container
+        val card = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            gravity = Gravity.CENTER
+            val cardBg = GradientDrawable().apply {
+                setColor(Color.parseColor("#FF141419"))
+                cornerRadius = 20f * density
+            }
+            background = cardBg
+            setPadding(
+                (32 * density).toInt(),
+                (32 * density).toInt(),
+                (32 * density).toInt(),
+                (32 * density).toInt()
+            )
+        }
+
+        val cardParams = FrameLayout.LayoutParams(
+            FrameLayout.LayoutParams.MATCH_PARENT,
+            FrameLayout.LayoutParams.WRAP_CONTENT
+        ).apply {
+            gravity = Gravity.CENTER
+            val margin = (28 * density).toInt()
+            setMargins(margin, margin, margin, margin)
+        }
+
+        // Lock icon
+        val icon = TextView(this).apply {
+            text = "🔒"
+            textSize = 48f
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, (24 * density).toInt())
+        }
+
+        // Title
+        val title = TextView(this).apply {
+            text = "Focus Guarded"
+            setTextColor(Color.WHITE)
+            textSize = 24f
+            typeface = Typeface.DEFAULT_BOLD
+            gravity = Gravity.CENTER
+            setPadding(0, 0, 0, (12 * density).toInt())
+        }
+
+        // Random motivational quote
+        val quote = TextView(this).apply {
+            val randomQuote = MOTIVATIONAL_QUOTES[Random.nextInt(MOTIVATIONAL_QUOTES.size)]
+            text = "\"$randomQuote\""
+            setTextColor(Color.parseColor("#9CA3AF"))
+            textSize = 15f
+            gravity = Gravity.CENTER
+            setLineSpacing(4f * density, 1f)
+            setPadding(0, 0, 0, (32 * density).toInt())
+        }
+
+        // "Go Back to Work" button
+        val button = Button(this).apply {
+            text = "Go Back to Work"
+            setTextColor(Color.parseColor("#0A0A0C"))
+            textSize = 16f
+            typeface = Typeface.DEFAULT_BOLD
+            isAllCaps = false
+            val btnBg = GradientDrawable().apply {
+                setColor(Color.WHITE)
+                cornerRadius = 12f * density
+            }
+            background = btnBg
+            setPadding(
+                (24 * density).toInt(),
+                (14 * density).toInt(),
+                (24 * density).toInt(),
+                (14 * density).toInt()
+            )
+
+            setOnClickListener {
+                dismissOverlay()
+                executeBackNavigation()
+
+                // Navigate to home screen to fully break the loop
+                val homeIntent = Intent(Intent.ACTION_MAIN).apply {
+                    addCategory(Intent.CATEGORY_HOME)
+                    flags = Intent.FLAG_ACTIVITY_NEW_TASK
+                }
+                startActivity(homeIntent)
+            }
+        }
+
+        val buttonParams = LinearLayout.LayoutParams(
+            LinearLayout.LayoutParams.MATCH_PARENT,
+            (54 * density).toInt()
+        )
+
+        card.addView(icon)
+        card.addView(title)
+        card.addView(quote)
+        card.addView(button, buttonParams)
+
+        root.addView(card, cardParams)
+
+        return root
     }
 
     // ========================================================================
@@ -642,6 +863,7 @@ class FocusAccessibilityService : AccessibilityService() {
     override fun onDestroy() {
         super.onDestroy()
         pendingDebounceRunnable?.let { mainHandler.removeCallbacks(it) }
+        dismissOverlay()
         try {
             unregisterReceiver(exitReceiver)
         } catch (e: Exception) {
