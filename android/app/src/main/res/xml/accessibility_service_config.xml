@@ -1,7 +1,8 @@
 <?xml version="1.0" encoding="utf-8"?>
 <accessibility-service xmlns:android="http://schemas.android.com/apk/res/android"
-    android:accessibilityEventTypes="typeWindowStateChanged|typeWindowContentChanged|typeViewClicked|typeViewScrolled"
+    android:accessibilityEventTypes="typeWindowStateChanged|typeViewScrolled"
     android:accessibilityFeedbackType="feedbackGeneric"
-    android:notificationTimeout="50"
-    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagIncludeNotImportantViews|flagReportViewIds"
-    android:canRetrieveWindowContent="true" />
+    android:notificationTimeout="100"
+    android:accessibilityFlags="flagRetrieveInteractiveWindows|flagIncludeNotImportantViews|flagReportViewIds|flagRequestEnhancedWebAccessibility"
+    android:canRetrieveWindowContent="true"
+    android:packageNames="com.google.android.youtube,com.instagram.android,com.snapchat.android,com.android.chrome,org.mozilla.firefox,org.mozilla.fenix,com.brave.browser,com.sec.android.app.sbrowser,com.microsoft.emmx,com.opera.browser,com.opera.mini.native,com.duckduckgo.mobile.android,com.vivaldi.browser,com.kiwibrowser.browser,com.UCMobile.intl,com.UCMobile,mark.via.gp" />

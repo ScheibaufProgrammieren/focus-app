@@ -85,6 +85,12 @@ class MainActivity : AppCompatActivity() {
         binding.switchSnapchat.setOnCheckedChangeListener { _, isChecked ->
             prefs.edit().putBoolean("snapchat_enabled", isChecked).apply()
         }
+
+        // Bind Browser toggle
+        binding.switchBrowser.isChecked = prefs.getBoolean("browser_enabled", true)
+        binding.switchBrowser.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean("browser_enabled", isChecked).apply()
+        }
     }
 
     private fun updatePermissionAndDashboardStatus() {
