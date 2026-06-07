@@ -32,12 +32,13 @@ class FocusAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         val packageName = event.packageName?.toString() ?: return
+        val className = event.className?.toString() ?: ""
 
         // 1. Detect category: Browsers vs Target Apps
         val isBrowser = packageName.contains("chrome", ignoreCase = true) ||
                 packageName.contains("firefox", ignoreCase = true) ||
                 packageName.contains("browser", ignoreCase = true) ||
-                packageName.contains("sbrowser", ignoreCase = true) || // Samsung
+                packageName.contains("sbrowser", ignoreCase = true) || // Samsung Internet
                 packageName.contains("emmx", ignoreCase = true) ||     // Edge
                 packageName.contains("opera", ignoreCase = true) ||
                 packageName.contains("duckduckgo", ignoreCase = true)
@@ -56,7 +57,25 @@ class FocusAccessibilityService : AccessibilityService() {
         if (isInstagram && !prefs.getBoolean("instagram_enabled", true)) return
         if (isSnapchat && !prefs.getBoolean("snapchat_enabled", true)) return
 
-        // 3. Resolve Active Layout Tree Root
+        // 3. FAIL-SAFE: Instant block based on known Activity Class Names (Zero-latency)
+        if (isYouTube && (
+            className.contains("ReelWatchActivity", ignoreCase = true) ||
+            className.contains("ShortsWatchActivity", ignoreCase = true) ||
+            className.contains("ReelPlayer", ignoreCase = true)
+        )) {
+            triggerBlockerOverlay()
+            return
+        }
+
+        if (isInstagram && (
+            className.contains("ClipsViewerActivity", ignoreCase = true) ||
+            className.contains("ReelsViewerActivity", ignoreCase = true)
+        )) {
+            triggerBlockerOverlay()
+            return
+        }
+
+        // 4. Resolve Active Layout Tree Root (Climb up from event.source if rootInActiveWindow is null)
         var rootNode = rootInActiveWindow
         if (rootNode == null) {
             var source = event.source
@@ -68,7 +87,7 @@ class FocusAccessibilityService : AccessibilityService() {
         
         if (rootNode == null) return
 
-        // 4. Run detection based on app category
+        // 5. Run layout content heuristics scanning
         val shouldBlock = if (isBrowser) {
             detectBrowserShortsOrReels(rootNode)
         } else {
@@ -80,63 +99,69 @@ class FocusAccessibilityService : AccessibilityService() {
         }
     }
 
-    // Heuristics scanning for native apps using text, description, and ID names
+    // Heuristics scanning for native apps using text, description, class, and ID names
     private fun scanNodeForIndicators(node: AccessibilityNodeInfo?, packageName: String): Boolean {
         if (node == null) return false
 
         val text = node.text?.toString() ?: ""
         val desc = node.contentDescription?.toString() ?: ""
         val resId = node.viewIdResourceName ?: ""
+        val className = node.className?.toString() ?: ""
 
         val isYouTube = packageName.contains("youtube", ignoreCase = true)
         val isInstagram = packageName.contains("instagram", ignoreCase = true)
         val isSnapchat = packageName.contains("snapchat", ignoreCase = true)
 
         if (isYouTube) {
-            // YouTube Shorts indicators (matches obfuscated layouts via text/description)
-            if (resId.contains("reel", ignoreCase = true) || 
-                resId.contains("short", ignoreCase = true) ||
-                desc.contains("shorts player", ignoreCase = true) ||
-                desc.contains("shorts video", ignoreCase = true) ||
-                desc.contains("Remix", ignoreCase = true) ||
-                text.equals("Shorts", ignoreCase = true)) {
-                
-                // Exclude the bottom navigation tab button itself
+            // YouTube Shorts signatures
+            val hasShortsId = resId.contains("reel", ignoreCase = true) || resId.contains("short", ignoreCase = true)
+            val hasShortsText = text.equals("Shorts", ignoreCase = true) || text.contains("Remix", ignoreCase = true)
+            val hasShortsDesc = desc.contains("shorts player", ignoreCase = true) || 
+                                 desc.contains("shorts video", ignoreCase = true) || 
+                                 desc.contains("Remix", ignoreCase = true) ||
+                                 desc.contains("Dislike this video", ignoreCase = true)
+
+            if (hasShortsId || hasShortsText || hasShortsDesc) {
+                // Ignore navigation components to allow standard home feed browsing
                 if (!resId.contains("tab", ignoreCase = true) && 
-                    !resId.contains("button", ignoreCase = true)) {
+                    !resId.contains("button", ignoreCase = true) &&
+                    !desc.contains("tab", ignoreCase = true)) {
                     return true
                 }
             }
         }
 
         if (isInstagram) {
-            // Instagram Reels indicators (matches obfuscated layouts via clips labels)
-            if (resId.contains("clips", ignoreCase = true) || 
-                resId.contains("reels", ignoreCase = true) ||
-                desc.contains("Reel by", ignoreCase = true) || 
-                desc.contains("Share Reel", ignoreCase = true) ||
-                desc.contains("Reels", ignoreCase = true) ||
-                text.contains("Reel by", ignoreCase = true) ||
-                text.contains("Write a comment...", ignoreCase = true) ||
-                text.contains("Add a comment...", ignoreCase = true) ||
-                text.equals("Reels", ignoreCase = true)) {
-                
-                // Exclude profiles, home tabs, and buttons
+            // Instagram Reels signatures (accounts for obfuscation using text & description indicators)
+            val hasReelsId = resId.contains("clips", ignoreCase = true) || resId.contains("reels", ignoreCase = true)
+            val hasReelsText = text.contains("Reel by", ignoreCase = true) || 
+                                text.contains("Write a comment...", ignoreCase = true) || 
+                                text.contains("Add a comment...", ignoreCase = true) || 
+                                text.equals("Reels", ignoreCase = true)
+            val hasReelsDesc = desc.contains("Reel by", ignoreCase = true) || 
+                                 desc.contains("Share Reel", ignoreCase = true) || 
+                                 desc.contains("Reels", ignoreCase = true) ||
+                                 desc.contains("Double tap to Like", ignoreCase = true) // Reels specific like action
+
+            if (hasReelsId || hasReelsText || hasReelsDesc) {
+                // Ignore navigation bars, search queries, and profile tabs
                 if (!resId.contains("tab", ignoreCase = true) && 
                     !resId.contains("button", ignoreCase = true) &&
-                    !desc.contains("button", ignoreCase = true)) {
+                    !desc.contains("button", ignoreCase = true) &&
+                    !desc.contains("profile", ignoreCase = true)) {
                     return true
                 }
             }
         }
 
         if (isSnapchat) {
-            // Snapchat Spotlight indicators
-            if (resId.contains("spotlight", ignoreCase = true) ||
-                desc.contains("Spotlight", ignoreCase = true) ||
-                text.contains("Spotlight", ignoreCase = true) ||
-                text.contains("Send message in Spotlight", ignoreCase = true)) {
-                
+            // Snapchat Spotlight signatures
+            val hasSpotlightId = resId.contains("spotlight", ignoreCase = true)
+            val hasSpotlightText = text.contains("Spotlight", ignoreCase = true) || 
+                                    text.contains("Send message in Spotlight", ignoreCase = true)
+            val hasSpotlightDesc = desc.contains("Spotlight", ignoreCase = true)
+
+            if (hasSpotlightId || hasSpotlightText || hasSpotlightDesc) {
                 if (!resId.contains("tab", ignoreCase = true) && 
                     !resId.contains("button", ignoreCase = true)) {
                     return true
@@ -144,7 +169,7 @@ class FocusAccessibilityService : AccessibilityService() {
             }
         }
 
-        // Recursively check all children
+        // Recursively check all children layout nodes
         for (i in 0 until node.childCount) {
             val child = node.getChild(i)
             if (scanNodeForIndicators(child, packageName)) {
