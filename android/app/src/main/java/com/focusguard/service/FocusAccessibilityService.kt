@@ -22,6 +22,8 @@ import android.view.accessibility.AccessibilityNodeInfo
 import android.view.accessibility.AccessibilityWindowInfo
 import android.widget.Button
 import android.widget.FrameLayout
+import android.view.ContextThemeWrapper
+import com.focusguard.app.R
 import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.random.Random
@@ -156,7 +158,11 @@ class FocusAccessibilityService : AccessibilityService() {
     override fun onCreate() {
         super.onCreate()
         val filter = IntentFilter("com.focusguard.ACTION_EXIT_FEED")
-        registerReceiver(exitReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.TIRAMISU) {
+            registerReceiver(exitReceiver, filter, Context.RECEIVER_NOT_EXPORTED)
+        } else {
+            registerReceiver(exitReceiver, filter)
+        }
         log("Service created")
     }
 
@@ -697,11 +703,12 @@ class FocusAccessibilityService : AccessibilityService() {
     // ========================================================================
 
     private fun buildOverlayView(appType: AppType): View {
-        val d = resources.displayMetrics.density
+        val themedContext = ContextThemeWrapper(this, R.style.Theme_FocusGuard)
+        val d = themedContext.resources.displayMetrics.density
         val blockedLabel = APP_TYPE_LABELS[appType] ?: "Short-form content"
 
         // Root — fullscreen dark overlay, intercepts back button
-        val root = object : FrameLayout(this) {
+        val root = object : FrameLayout(themedContext) {
             override fun dispatchKeyEvent(event: KeyEvent): Boolean {
                 if (event.keyCode == KeyEvent.KEYCODE_BACK) return true
                 return super.dispatchKeyEvent(event)
@@ -713,7 +720,7 @@ class FocusAccessibilityService : AccessibilityService() {
         }
 
         // ── Card container ──
-        val card = LinearLayout(this).apply {
+        val card = LinearLayout(themedContext).apply {
             orientation = LinearLayout.VERTICAL
             gravity = Gravity.CENTER
             background = GradientDrawable().apply {
@@ -734,7 +741,7 @@ class FocusAccessibilityService : AccessibilityService() {
         }
 
         // ── Shield icon ──
-        val icon = TextView(this).apply {
+        val icon = TextView(themedContext).apply {
             text = "🛡️"
             textSize = 52f
             gravity = Gravity.CENTER
@@ -742,7 +749,7 @@ class FocusAccessibilityService : AccessibilityService() {
         }
 
         // ── Title ──
-        val title = TextView(this).apply {
+        val title = TextView(themedContext).apply {
             text = "Focus Guarded"
             setTextColor(Color.WHITE)
             textSize = 26f
@@ -753,7 +760,7 @@ class FocusAccessibilityService : AccessibilityService() {
         }
 
         // ── What was blocked ──
-        val blockedBadge = TextView(this).apply {
+        val blockedBadge = TextView(themedContext).apply {
             text = "⊘  $blockedLabel blocked"
             setTextColor(Color.parseColor("#EF4444"))
             textSize = 13f
@@ -777,7 +784,7 @@ class FocusAccessibilityService : AccessibilityService() {
         }
 
         // ── Divider line ──
-        val divider = View(this).apply {
+        val divider = View(themedContext).apply {
             setBackgroundColor(Color.parseColor("#27272A"))
         }
         val dividerParams = LinearLayout.LayoutParams(
@@ -788,7 +795,7 @@ class FocusAccessibilityService : AccessibilityService() {
         }
 
         // ── Motivational quote ──
-        val quote = TextView(this).apply {
+        val quote = TextView(themedContext).apply {
             val randomQuote = MOTIVATIONAL_QUOTES[Random.nextInt(MOTIVATIONAL_QUOTES.size)]
             text = "\"$randomQuote\""
             setTextColor(Color.parseColor("#A1A1AA"))
@@ -800,7 +807,7 @@ class FocusAccessibilityService : AccessibilityService() {
         }
 
         // ── Go Back button ──
-        val button = Button(this).apply {
+        val button = Button(themedContext).apply {
             text = "Go Back to Work"
             setTextColor(Color.parseColor("#0A0A0C"))
             textSize = 16f
