@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">FocusGuard</string>
+    <string name="title_permissions">FocusGuard Setup</string>
+    <string name="desc_permissions">To block Reels and Shorts, FocusGuard requires two system configurations. Tap below to enable them.</string>
+    
+    <string name="perm_accessibility_title">1. Accessibility Service</string>
+    <string name="perm_accessibility_desc">Used to detect when you open Reels/Shorts within Instagram, YouTube, and Snapchat, so we can trigger the blocker overlay.</string>
+    <string name="perm_accessibility_btn">Enable Accessibility</string>
+    <string name="perm_accessibility_status_active">Active</string>
+    <string name="perm_accessibility_status_inactive">Inactive</string>
+
+    <string name="perm_overlay_title">2. Draw Over Apps (Overlay)</string>
+    <string name="perm_overlay_desc">Allows FocusGuard to display the motivational block screen on top of the target apps immediately when triggered.</string>
+    <string name="perm_overlay_btn">Enable Overlay</string>
+    
+    <string name="status_ready">FocusGuard is fully armed and active!</string>
+    <string name="status_not_ready">Configuration Required</string>
+</resources>

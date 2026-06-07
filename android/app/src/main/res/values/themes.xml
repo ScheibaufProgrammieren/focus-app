@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Base application theme. -->
+    <style name="Theme.FocusGuard" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <!-- Primary brand color. -->
+        <item name="colorPrimary">@color/accent_color</item>
+        <item name="colorPrimaryVariant">@color/accent_color</item>
+        <item name="colorOnPrimary">@color/white</item>
+        <!-- Backgrounds -->
+        <item name="android:statusBarColor">@color/bg_main</item>
+        <item name="android:windowBackground">@color/bg_main</item>
+    </style>
+
+    <!-- Overlay Theme -->
+    <style name="Theme.FocusGuard.Overlay" parent="Theme.MaterialComponents.DayNight.NoActionBar">
+        <item name="android:windowBackground">@color/bg_main</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:windowFullscreen">true</item>
+        <item name="android:windowIsTranslucent">false</item>
+        <item name="android:windowAnimationStyle">@android:style/Animation.Fade</item>
+        <item name="android:statusBarColor">@color/bg_main</item>
+        <item name="android:navigationBarColor">@color/bg_main</item>
+    </style>
+</resources>

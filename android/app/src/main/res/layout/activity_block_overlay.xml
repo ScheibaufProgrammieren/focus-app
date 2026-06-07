@@ -1,0 +1,76 @@
+<?xml version="1.0" encoding="utf-8"?>
+<androidx.constraintlayout.widget.ConstraintLayout xmlns:android="http://schemas.android.com/apk/res/android"
+    xmlns:app="http://schemas.android.com/apk/res-auto"
+    android:layout_width="match_parent"
+    android:layout_height="match_parent"
+    android:background="@color/bg_main"
+    android:padding="32dp">
+
+    <!-- Card wrapper for content -->
+    <LinearLayout
+        android:layout_width="match_parent"
+        android:layout_height="wrap_content"
+        android:orientation="vertical"
+        android:gravity="center"
+        android:padding="32dp"
+        android:background="@color/card_bg"
+        app:layout_constraintTop_toTopOf="parent"
+        app:layout_constraintBottom_toBottomOf="parent"
+        app:layout_constraintStart_toStartOf="parent"
+        app:layout_constraintEnd_toEndOf="parent">
+
+        <!-- Icon Circle -->
+        <FrameLayout
+            android:layout_width="80dp"
+            android:layout_height="80dp"
+            android:background="@android:drawable/dialog_holo_dark_frame"
+            android:backgroundTint="@color/accent_glow"
+            android:layout_marginBottom="24dp">
+
+            <ImageView
+                android:layout_width="38dp"
+                android:layout_height="38dp"
+                android:layout_gravity="center"
+                android:src="@android:drawable/ic_lock_idle_lock"
+                android:tint="@color/accent_color"
+                android:contentDescription="Lock" />
+        </FrameLayout>
+
+        <!-- Block Title -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="Focus Guarded"
+            android:textColor="@color/white"
+            android:textSize="24sp"
+            android:textStyle="bold"
+            android:layout_marginBottom="12dp" />
+
+        <!-- Block Quote -->
+        <TextView
+            android:id="@+id/tv_motivational_quote"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="Is this short-form loop really worth your future? Step away."
+            android:textColor="@color/text_secondary"
+            android:textSize="15sp"
+            android:gravity="center"
+            android:lineSpacingExtra="4dp"
+            android:fontStyle="italic"
+            android:layout_marginBottom="32dp" />
+
+        <!-- Go Back Button -->
+        <Button
+            android:id="@+id/btn_overlay_go_back"
+            android:layout_width="match_parent"
+            android:layout_height="54dp"
+            android:text="Go Back to Work"
+            android:textAllCaps="false"
+            android:textColor="@color/bg_main"
+            android:textStyle="bold"
+            android:backgroundTint="@color/white"
+            app:cornerRadius="12dp" />
+
+    </LinearLayout>
+
+</androidx.constraintlayout.widget.ConstraintLayout>
