@@ -1,6 +1,6 @@
 package com.focusguard.app
 
-import android.accessibilityservice.AccessibilityService
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -8,8 +8,9 @@ import android.os.Bundle
 import android.provider.Settings
 import android.text.TextUtils
 import android.view.View
-import android.accessibilityservice.AccessibilityServiceInfo
 import android.view.accessibility.AccessibilityManager
+import android.widget.CompoundButton
+import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.focusguard.app.databinding.ActivityMainBinding
 import com.focusguard.service.FocusAccessibilityService
@@ -24,11 +25,12 @@ class MainActivity : AppCompatActivity() {
         setContentView(binding.root)
 
         setupClickListeners()
+        setupDashboardToggles()
     }
 
     override fun onResume() {
         super.onResume()
-        updatePermissionStatus()
+        updatePermissionAndDashboardStatus()
     }
 
     private fun setupClickListeners() {
@@ -48,45 +50,91 @@ class MainActivity : AppCompatActivity() {
                 startActivity(intent)
             }
         }
+
+        binding.btnResetStats.setOnClickListener {
+            AlertDialog.Builder(this)
+                .setTitle("Reset Statistics")
+                .setMessage("Are you sure you want to clear your blocked loop statistics?")
+                .setPositiveButton("Reset") { _, _ ->
+                    val prefs = getSharedPreferences("FocusGuardPrefs", Context.MODE_PRIVATE)
+                    prefs.edit().putInt("blocked_count", 0).apply()
+                    binding.tvBlockedCount.text = "0"
+                }
+                .setNegativeButton("Cancel", null)
+                .show()
+        }
     }
 
-    private fun updatePermissionStatus() {
+    private fun setupDashboardToggles() {
+        val prefs = getSharedPreferences("FocusGuardPrefs", Context.MODE_PRIVATE)
+
+        // Bind YouTube toggle
+        binding.switchYoutube.isChecked = prefs.getBoolean("youtube_enabled", true)
+        binding.switchYoutube.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean("youtube_enabled", isChecked).apply()
+        }
+
+        // Bind Instagram toggle
+        binding.switchInstagram.isChecked = prefs.getBoolean("instagram_enabled", true)
+        binding.switchInstagram.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean("instagram_enabled", isChecked).apply()
+        }
+
+        // Bind Snapchat toggle
+        binding.switchSnapchat.isChecked = prefs.getBoolean("snapchat_enabled", true)
+        binding.switchSnapchat.setOnCheckedChangeListener { _, isChecked ->
+            prefs.edit().putBoolean("snapchat_enabled", isChecked).apply()
+        }
+    }
+
+    private fun updatePermissionAndDashboardStatus() {
         val hasAccessibility = isAccessibilityServiceEnabled()
         val hasOverlay = Settings.canDrawOverlays(this)
 
-        // Update Accessibility Button UI
-        if (hasAccessibility) {
-            binding.btnAccessibility.text = getString(R.string.perm_accessibility_status_active)
-            binding.btnAccessibility.isEnabled = false
-            binding.btnAccessibility.backgroundTintList = getColorStateList(R.color.toggle_on)
-        } else {
-            binding.btnAccessibility.text = getString(R.string.perm_accessibility_btn)
-            binding.btnAccessibility.isEnabled = true
-            binding.btnAccessibility.backgroundTintList = getColorStateList(R.color.white)
-        }
-
-        // Update Overlay Button UI
-        if (hasOverlay) {
-            binding.btnOverlay.text = "Active"
-            binding.btnOverlay.isEnabled = false
-            binding.btnOverlay.backgroundTintList = getColorStateList(R.color.toggle_on)
-        } else {
-            binding.btnOverlay.text = getString(R.string.perm_overlay_btn)
-            binding.btnOverlay.isEnabled = true
-            binding.btnOverlay.backgroundTintList = getColorStateList(R.color.white)
-        }
-
-        // Update Status Banner
         if (hasAccessibility && hasOverlay) {
+            // Both permissions active -> Hide Onboarding, Show Dashboard
+            binding.layoutPermissions.visibility = View.GONE
+            binding.layoutDashboard.visibility = View.VISIBLE
+
             binding.systemStatusBadge.text = getString(R.string.status_ready)
             binding.systemStatusBadge.setTextColor(getColor(R.color.toggle_on))
             binding.tvFooterStatus.text = "FocusGuard is listening. Safe focused state is guaranteed."
             binding.tvFooterStatus.setTextColor(getColor(R.color.text_secondary))
+
+            // Load and update statistics counter
+            val prefs = getSharedPreferences("FocusGuardPrefs", Context.MODE_PRIVATE)
+            val count = prefs.getInt("blocked_count", 0)
+            binding.tvBlockedCount.text = count.toString()
         } else {
+            // Permissions missing -> Show Onboarding, Hide Dashboard
+            binding.layoutPermissions.visibility = View.VISIBLE
+            binding.layoutDashboard.visibility = View.GONE
+
             binding.systemStatusBadge.text = getString(R.string.status_not_ready)
             binding.systemStatusBadge.setTextColor(getColor(R.color.accent_color))
             binding.tvFooterStatus.text = "Setup is incomplete. Both permissions are required to operate."
             binding.tvFooterStatus.setTextColor(getColor(R.color.accent_color))
+
+            // Update individual onboarding buttons
+            if (hasAccessibility) {
+                binding.btnAccessibility.text = getString(R.string.perm_accessibility_status_active)
+                binding.btnAccessibility.isEnabled = false
+                binding.btnAccessibility.backgroundTintList = getColorStateList(R.color.toggle_on)
+            } else {
+                binding.btnAccessibility.text = getString(R.string.perm_accessibility_btn)
+                binding.btnAccessibility.isEnabled = true
+                binding.btnAccessibility.backgroundTintList = getColorStateList(R.color.white)
+            }
+
+            if (hasOverlay) {
+                binding.btnOverlay.text = "Active"
+                binding.btnOverlay.isEnabled = false
+                binding.btnOverlay.backgroundTintList = getColorStateList(R.color.toggle_on)
+            } else {
+                binding.btnOverlay.text = getString(R.string.perm_overlay_btn)
+                binding.btnOverlay.isEnabled = true
+                binding.btnOverlay.backgroundTintList = getColorStateList(R.color.white)
+            }
         }
     }
 
@@ -106,8 +154,7 @@ class MainActivity : AppCompatActivity() {
                 return true
             }
         }
-        
-        // Secondary verification step check via active AccessibilityManager
+
         val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
         val runningServices = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_GENERIC)
         for (serviceInfo in runningServices) {

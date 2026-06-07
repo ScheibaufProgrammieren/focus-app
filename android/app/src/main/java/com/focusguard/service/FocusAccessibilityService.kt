@@ -32,105 +32,88 @@ class FocusAccessibilityService : AccessibilityService() {
 
     override fun onAccessibilityEvent(event: AccessibilityEvent) {
         val packageName = event.packageName?.toString() ?: return
-        
-        // Only monitor target packages
-        if (packageName != "com.google.android.youtube" &&
-            packageName != "com.instagram.android" &&
-            packageName != "com.snapchat.android") {
+
+        // 1. Package Filter using flexible substring checks (supports Vanced/Lite/mods)
+        val isYouTube = packageName.contains("youtube", ignoreCase = true)
+        val isInstagram = packageName.contains("instagram", ignoreCase = true)
+        val isSnapchat = packageName.contains("snapchat", ignoreCase = true)
+
+        if (!isYouTube && !isInstagram && !isSnapchat) {
             return
         }
 
-        val rootNode = rootInActiveWindow ?: return
-        
-        val shouldBlock = when (packageName) {
-            "com.google.android.youtube" -> detectYouTubeShorts(rootNode)
-            "com.instagram.android" -> detectInstagramReels(rootNode)
-            "com.snapchat.android" -> detectSnapchatSpotlight(rootNode)
-            else -> false
+        // 2. Check SharedPreferences if blocking is enabled for this app in dashboard
+        val prefs = getSharedPreferences("FocusGuardPrefs", Context.MODE_PRIVATE)
+        if (isYouTube && !prefs.getBoolean("youtube_enabled", true)) return
+        if (isInstagram && !prefs.getBoolean("instagram_enabled", true)) return
+        if (isSnapchat && !prefs.getBoolean("snapchat_enabled", true)) return
+
+        // 3. Resolve Active Layout Tree Root
+        // If rootInActiveWindow is null, climb up from event.source to the tree root
+        var rootNode = rootInActiveWindow
+        if (rootNode == null) {
+            var source = event.source
+            while (source?.parent != null) {
+                source = source.parent
+            }
+            rootNode = source
         }
+        
+        if (rootNode == null) return
+
+        // 4. Scan hierarchy for block targets
+        val shouldBlock = scanNodeRecursive(rootNode, packageName)
 
         if (shouldBlock) {
             triggerBlockerOverlay()
         }
     }
 
-    private fun detectYouTubeShorts(node: AccessibilityNodeInfo): Boolean {
-        // Method 1: Check resource IDs containing key shorts/reel tokens
-        val matches = findNodesByKeyword(node, listOf(
-            "com.google.android.youtube:id/reel_player",
-            "com.google.android.youtube:id/reel_recycler",
-            "com.google.android.youtube:id/shorts_player"
-        ))
-        if (matches) return true
-
-        // Method 2: Fallback scan of UI layout hierarchy looking for active player context
-        return scanNodeHierarchyForTerms(node, "reel")
-    }
-
-    private fun detectInstagramReels(node: AccessibilityNodeInfo): Boolean {
-        // Method 1: Check resource IDs containing clips/reels identifiers
-        // Instagram calls Reels "clips" internally
-        val matches = findNodesByKeyword(node, listOf(
-            "com.instagram.android:id/clips_video_container",
-            "com.instagram.android:id/clips_viewer_container",
-            "com.instagram.android:id/reels_viewer_container"
-        ))
-        if (matches) return true
-
-        // Method 2: Fallback scan for text-based active viewports
-        return scanNodeHierarchyForTerms(node, "clips_video")
-    }
-
-    private fun detectSnapchatSpotlight(node: AccessibilityNodeInfo): Boolean {
-        // Snapchat Spotlight viewer detection
-        val matches = findNodesByKeyword(node, listOf(
-            "com.snapchat.android:id/spotlight",
-            "com.snapchat.android:id/spotlight_player"
-        ))
-        if (matches) return true
-
-        return scanNodeHierarchyForTerms(node, "spotlight")
-    }
-
-    // Helper to scan tree recursively matching exact resource ID tags
-    private fun findNodesByKeyword(node: AccessibilityNodeInfo?, ids: List<String>): Boolean {
+    // Unified, case-insensitive layout scanner mapping app signatures
+    private fun scanNodeRecursive(node: AccessibilityNodeInfo?, packageName: String): Boolean {
         if (node == null) return false
 
-        val viewId = node.viewIdResourceName
-        if (viewId != null) {
-            for (id in ids) {
-                if (viewId.equals(id, ignoreCase = true) || viewId.contains(id)) {
+        val resourceId = node.viewIdResourceName
+        if (resourceId != null) {
+            val isMatch = when {
+                packageName.contains("youtube", ignoreCase = true) -> {
+                    resourceId.contains("reel_player", ignoreCase = true) ||
+                    resourceId.contains("reel_watch", ignoreCase = true) ||
+                    resourceId.contains("shorts_player", ignoreCase = true) ||
+                    resourceId.contains("shorts_video", ignoreCase = true) ||
+                    resourceId.contains("reel_container", ignoreCase = true) ||
+                    resourceId.contains("reel_recycler", ignoreCase = true)
+                }
+                packageName.contains("instagram", ignoreCase = true) -> {
+                    resourceId.contains("clips_video", ignoreCase = true) ||
+                    resourceId.contains("clips_viewer", ignoreCase = true) ||
+                    resourceId.contains("reels_viewer", ignoreCase = true) ||
+                    resourceId.contains("clips_pager", ignoreCase = true) ||
+                    resourceId.contains("clips_viewer_pager", ignoreCase = true)
+                }
+                packageName.contains("snapchat", ignoreCase = true) -> {
+                    resourceId.contains("spotlight_player", ignoreCase = true) ||
+                    resourceId.contains("spotlight_card", ignoreCase = true) ||
+                    resourceId.contains("spotlight_viewer", ignoreCase = true)
+                }
+                else -> false
+            }
+
+            if (isMatch) {
+                // Ignore navigation tabs, launch shortcuts, and entry buttons to prevent main feed blocks
+                if (!resourceId.contains("tab", ignoreCase = true) &&
+                    !resourceId.contains("button", ignoreCase = true) &&
+                    !resourceId.contains("icon", ignoreCase = true) &&
+                    !resourceId.contains("shortcut", ignoreCase = true)) {
                     return true
                 }
             }
         }
 
+        // Check child components
         for (i in 0 until node.childCount) {
             val child = node.getChild(i)
-            if (findNodesByKeyword(child, ids)) {
-                return true
-            }
-        }
-        return false
-    }
-
-    // Recursive backup scan to identify text or resource descriptions containing keyword identifiers
-    private fun scanNodeHierarchyForTerms(node: AccessibilityNodeInfo?, term: String): Boolean {
-        if (node == null) return false
-
-        val resourceId = node.viewIdResourceName
-        if (resourceId != null && resourceId.contains(term, ignoreCase = true)) {
-            // Additional check: filter out navigation items like tab icons to prevent false-positive home screen blocking
-            if (!resourceId.contains("tab", ignoreCase = true) && 
-                !resourceId.contains("button", ignoreCase = true) &&
-                !resourceId.contains("icon", ignoreCase = true)) {
-                return true
-            }
-        }
-
-        for (i in 0 until node.childCount) {
-            val child = node.getChild(i)
-            if (scanNodeHierarchyForTerms(child, term)) {
+            if (scanNodeRecursive(child, packageName)) {
                 return true
             }
         }
@@ -140,11 +123,15 @@ class FocusAccessibilityService : AccessibilityService() {
     private fun triggerBlockerOverlay() {
         val currentTime = System.currentTimeMillis()
         if (currentTime - lastBlockTime < BLOCK_COOLDOWN_MS) {
-            return // Skip if cooldown hasn't expired to avoid screen launch flooding
+            return // Prevent overlay flood
         }
         lastBlockTime = currentTime
 
-        // Open full screen focus blocker overlay activity
+        // Increment block counter in SharedPreferences
+        val prefs = getSharedPreferences("FocusGuardPrefs", Context.MODE_PRIVATE)
+        val count = prefs.getInt("blocked_count", 0)
+        prefs.edit().putInt("blocked_count", count + 1).apply()
+
         val intent = Intent(this, BlockOverlayActivity::class.java).apply {
             flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP
         }
@@ -152,9 +139,8 @@ class FocusAccessibilityService : AccessibilityService() {
     }
 
     private fun executeBackNavigation() {
-        // Execute BACK actions sequentially to exit the active viewport
+        // Sequentially execute global back actions to exit layout viewports
         performGlobalAction(GLOBAL_ACTION_BACK)
-        // Delay slightly and execute a second back action to guarantee exit out of full screen layout
         android.os.Handler(mainLooper).postDelayed({
             performGlobalAction(GLOBAL_ACTION_BACK)
         }, 150)
