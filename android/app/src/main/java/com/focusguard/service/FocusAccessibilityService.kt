@@ -27,6 +27,14 @@ import com.focusguard.app.R
 import android.widget.LinearLayout
 import android.widget.TextView
 import kotlin.random.Random
+import android.app.Notification
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.app.PendingIntent
+import android.content.pm.ServiceInfo
+import android.os.Build
+import androidx.core.app.NotificationCompat
+import android.content.SharedPreferences
 
 /**
  * FocusAccessibilityService — Content blocking engine for FocusGuard.
@@ -166,6 +174,67 @@ class FocusAccessibilityService : AccessibilityService() {
         log("Service created")
     }
 
+    override fun onServiceConnected() {
+        super.onServiceConnected()
+        log("Service connected")
+        startServiceForeground()
+    }
+
+    private fun startServiceForeground() {
+        val channelId = "focusguard_service_channel"
+        val channelName = "FocusGuard Service"
+        
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                channelId,
+                channelName,
+                NotificationManager.IMPORTANCE_LOW
+            ).apply {
+                description = "Keeps FocusGuard active in the background"
+                setShowBadge(false)
+            }
+            val manager = getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            manager.createNotificationChannel(channel)
+        }
+
+        val pendingIntent = PendingIntent.getActivity(
+            this,
+            0,
+            Intent(this, com.focusguard.app.MainActivity::class.java),
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
+        val notification = NotificationCompat.Builder(this, channelId)
+            .setContentTitle("FocusGuard Active")
+            .setContentText("Protecting your focus from Reels & Shorts.")
+            .setSmallIcon(R.mipmap.ic_launcher)
+            .setContentIntent(pendingIntent)
+            .setOngoing(true)
+            .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .build()
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+            val type = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            } else {
+                0
+            }
+            startForeground(1001, notification, type)
+        } else {
+            startForeground(1001, notification)
+        }
+        log("Foreground service started")
+    }
+
+    private fun getSafePrefs(): SharedPreferences {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            val deviceContext = createDeviceProtectedStorageContext()
+            deviceContext.moveSharedPreferencesFrom(this, "FocusGuardPrefs")
+            return deviceContext.getSharedPreferences("FocusGuardPrefs", Context.MODE_PRIVATE)
+        }
+        return getSharedPreferences("FocusGuardPrefs", Context.MODE_PRIVATE)
+    }
+
     // ========================================================================
     // EVENT DISPATCH
     // ========================================================================
@@ -224,7 +293,7 @@ class FocusAccessibilityService : AccessibilityService() {
     }
 
     private fun isBlockingEnabled(appType: AppType): Boolean {
-        val prefs = getSharedPreferences("FocusGuardPrefs", Context.MODE_PRIVATE)
+        val prefs = getSafePrefs()
         return when (appType) {
             AppType.YOUTUBE -> prefs.getBoolean("youtube_enabled", true)
             AppType.INSTAGRAM -> prefs.getBoolean("instagram_enabled", true)
@@ -591,7 +660,7 @@ class FocusAccessibilityService : AccessibilityService() {
         lastBlockedAppType = appType
 
         // Increment persistent block counter
-        val prefs = getSharedPreferences("FocusGuardPrefs", Context.MODE_PRIVATE)
+        val prefs = getSafePrefs()
         val count = prefs.getInt("blocked_count", 0)
         prefs.edit().putInt("blocked_count", count + 1).apply()
 

@@ -14,6 +14,8 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import com.focusguard.app.databinding.ActivityMainBinding
 import com.focusguard.service.FocusAccessibilityService
+import android.content.SharedPreferences
+import android.os.Build
 
 class MainActivity : AppCompatActivity() {
 
@@ -24,6 +26,7 @@ class MainActivity : AppCompatActivity() {
         binding = ActivityMainBinding.inflate(layoutInflater)
         setContentView(binding.root)
 
+        requestNotificationPermission()
         setupClickListeners()
         setupDashboardToggles()
     }
@@ -56,7 +59,7 @@ class MainActivity : AppCompatActivity() {
                 .setTitle("Reset Statistics")
                 .setMessage("Are you sure you want to clear your blocked loop statistics?")
                 .setPositiveButton("Reset") { _, _ ->
-                    val prefs = getSharedPreferences("FocusGuardPrefs", Context.MODE_PRIVATE)
+                    val prefs = getSafePrefs()
                     prefs.edit().putInt("blocked_count", 0).apply()
                     binding.tvBlockedCount.text = "0"
                 }
@@ -66,7 +69,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupDashboardToggles() {
-        val prefs = getSharedPreferences("FocusGuardPrefs", Context.MODE_PRIVATE)
+        val prefs = getSafePrefs()
 
         // Bind YouTube toggle
         binding.switchYoutube.isChecked = prefs.getBoolean("youtube_enabled", true)
@@ -108,7 +111,7 @@ class MainActivity : AppCompatActivity() {
             binding.tvFooterStatus.setTextColor(getColor(R.color.text_secondary))
 
             // Load and update statistics counter
-            val prefs = getSharedPreferences("FocusGuardPrefs", Context.MODE_PRIVATE)
+            val prefs = getSafePrefs()
             val count = prefs.getInt("blocked_count", 0)
             binding.tvBlockedCount.text = count.toString()
         } else {
@@ -171,5 +174,30 @@ class MainActivity : AppCompatActivity() {
         }
 
         return false
+    }
+
+    private fun getSafePrefs(): SharedPreferences {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+            val deviceContext = createDeviceProtectedStorageContext()
+            deviceContext.moveSharedPreferencesFrom(this, "FocusGuardPrefs")
+            return deviceContext.getSharedPreferences("FocusGuardPrefs", Context.MODE_PRIVATE)
+        }
+        return getSharedPreferences("FocusGuardPrefs", Context.MODE_PRIVATE)
+    }
+
+    private fun requestNotificationPermission() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            if (androidx.core.content.ContextCompat.checkSelfPermission(
+                    this,
+                    android.Manifest.permission.POST_NOTIFICATIONS
+                ) != android.content.pm.PackageManager.PERMISSION_GRANTED
+            ) {
+                androidx.core.app.ActivityCompat.requestPermissions(
+                    this,
+                    arrayOf(android.Manifest.permission.POST_NOTIFICATIONS),
+                    102
+                )
+            }
+        }
     }
 }
