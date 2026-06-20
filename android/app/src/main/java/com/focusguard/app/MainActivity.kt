@@ -34,6 +34,20 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         updatePermissionAndDashboardStatus()
+
+        // Auto-wake the accessibility service if enabled in settings
+        if (FocusAccessibilityService.isEnabled(this)) {
+            val intent = Intent(this, FocusAccessibilityService::class.java)
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(intent)
+                } else {
+                    startService(intent)
+                }
+            } catch (e: java.lang.Exception) {
+                android.util.Log.e("FocusGuard", "Failed to auto-wake service in onResume: ${e.message}")
+            }
+        }
     }
 
     private fun setupClickListeners() {
@@ -65,6 +79,21 @@ class MainActivity : AppCompatActivity() {
                 }
                 .setNegativeButton("Cancel", null)
                 .show()
+        }
+
+        binding.btnDisableService.setOnClickListener {
+            val intent = Intent(this, FocusAccessibilityService::class.java).apply {
+                action = FocusAccessibilityService.ACTION_DISABLE_SERVICE
+            }
+            try {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    startForegroundService(intent)
+                } else {
+                    startService(intent)
+                }
+            } catch (e: Exception) {
+                android.util.Log.e("FocusGuard", "Failed to trigger service disable: ${e.message}")
+            }
         }
     }
 
@@ -148,32 +177,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun isAccessibilityServiceEnabled(): Boolean {
-        val expectedComponentName = "${packageName}/${FocusAccessibilityService::class.java.canonicalName}"
-        val enabledServicesSetting = Settings.Secure.getString(
-            contentResolver,
-            Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
-        ) ?: return false
-
-        val colonSplitter = TextUtils.SimpleStringSplitter(':')
-        colonSplitter.setString(enabledServicesSetting)
-
-        while (colonSplitter.hasNext()) {
-            val componentNameString = colonSplitter.next()
-            if (componentNameString.equals(expectedComponentName, ignoreCase = true)) {
-                return true
-            }
-        }
-
-        val am = getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
-        val runningServices = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_GENERIC)
-        for (serviceInfo in runningServices) {
-            val id = serviceInfo.id
-            if (id.contains(packageName) && id.contains(FocusAccessibilityService::class.java.simpleName)) {
-                return true
-            }
-        }
-
-        return false
+        return FocusAccessibilityService.isEnabled(this)
     }
 
     private fun getSafePrefs(): SharedPreferences {

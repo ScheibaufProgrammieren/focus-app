@@ -35,6 +35,9 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import androidx.core.app.NotificationCompat
 import android.content.SharedPreferences
+import android.text.TextUtils
+import android.accessibilityservice.AccessibilityServiceInfo
+import android.view.accessibility.AccessibilityManager
 
 /**
  * FocusAccessibilityService — Content blocking engine for FocusGuard.
@@ -142,6 +145,42 @@ class FocusAccessibilityService : AccessibilityService() {
             AppType.SNAPCHAT to "Snapchat Spotlight",
             AppType.BROWSER to "Short-form content in browser"
         )
+
+        const val ACTION_DISABLE_SERVICE = "com.focusguard.service.ACTION_DISABLE_SERVICE"
+
+        fun isEnabled(context: Context): Boolean {
+            val expectedComponentName = "${context.packageName}/${FocusAccessibilityService::class.java.canonicalName}"
+            val enabledServicesSetting = Settings.Secure.getString(
+                context.contentResolver,
+                Settings.Secure.ENABLED_ACCESSIBILITY_SERVICES
+            ) ?: return false
+
+            val colonSplitter = TextUtils.SimpleStringSplitter(':')
+            colonSplitter.setString(enabledServicesSetting)
+
+            while (colonSplitter.hasNext()) {
+                val componentNameString = colonSplitter.next()
+                if (componentNameString.equals(expectedComponentName, ignoreCase = true)) {
+                    return true
+                }
+            }
+
+            // Fallback check
+            try {
+                val am = context.getSystemService(Context.ACCESSIBILITY_SERVICE) as AccessibilityManager
+                val runningServices = am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_GENERIC)
+                for (serviceInfo in runningServices) {
+                    val id = serviceInfo.id
+                    if (id.contains(context.packageName) && id.contains(FocusAccessibilityService::class.java.simpleName)) {
+                        return true
+                    }
+                }
+            } catch (e: Exception) {
+                // Ignore fallback exceptions
+            }
+
+            return false
+        }
     }
 
     private var lastBlockTime: Long = 0
@@ -171,7 +210,21 @@ class FocusAccessibilityService : AccessibilityService() {
         } else {
             registerReceiver(exitReceiver, filter)
         }
+        startServiceForeground()
         log("Service created")
+    }
+
+    override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
+        log("onStartCommand: intent action = ${intent?.action}")
+        if (intent != null && intent.action == ACTION_DISABLE_SERVICE) {
+            log("Disabling accessibility service via intent")
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                disableSelf()
+            }
+            return START_NOT_STICKY
+        }
+        startServiceForeground()
+        return START_STICKY
     }
 
     override fun onServiceConnected() {
@@ -204,6 +257,16 @@ class FocusAccessibilityService : AccessibilityService() {
             PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
         )
 
+        val disableIntent = Intent(this, FocusAccessibilityService::class.java).apply {
+            action = ACTION_DISABLE_SERVICE
+        }
+        val disablePendingIntent = PendingIntent.getService(
+            this,
+            1,
+            disableIntent,
+            PendingIntent.FLAG_IMMUTABLE or PendingIntent.FLAG_UPDATE_CURRENT
+        )
+
         val notification = NotificationCompat.Builder(this, channelId)
             .setContentTitle("FocusGuard Active")
             .setContentText("Protecting your focus from Reels & Shorts.")
@@ -211,6 +274,11 @@ class FocusAccessibilityService : AccessibilityService() {
             .setContentIntent(pendingIntent)
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
+            .addAction(
+                R.drawable.ic_power,
+                "Turn Off",
+                disablePendingIntent
+            )
             .build()
 
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
